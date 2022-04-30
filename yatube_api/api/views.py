@@ -1,7 +1,6 @@
 from django.shortcuts import get_object_or_404
 from posts.models import Comment, Group, Post, User
 from rest_framework import status, viewsets
-from rest_framework.decorators import api_view
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
@@ -40,41 +39,65 @@ class GroupViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = GroupSerializer
 
 
-@api_view(['GET', 'POST'])
-def api_comments(request, post_id):
-    if request.method == 'POST':
-        serializer = CommentSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(author=request.user,
-                            post_id=post_id)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+class CommentsViewSet (viewsets.ViewSet):
+    def get_queryset(self):
+        qs = Comment.objects.filter(post=self.kwargs['post_id'])
+        return qs
 
-    comments = Comment.objects.filter(post=post_id)
-    serializer = CommentSerializer(comments, many=True)
-    return Response(serializer.data)
+    def get_object(self):
+        obj = get_object_or_404(Comment, id=self.kwargs['pk'])
+        return obj
 
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = CommentSerializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
-@api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
-def api_comments_detail(request, post_id, comment_id):
-    comment = get_object_or_404(Comment, id=comment_id)
+    def retrieve(self, request, post_id, pk):
+        instance = self.get_object()
+        serializer = CommentSerializer(instance, many=False)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
-    if request.method == 'GET':
-        serializer = CommentSerializer(comment)
-        return Response(serializer.data)
-
-    if comment.author != request.user:
-        return Response(status=status.HTTP_403_FORBIDDEN)
-
-    if request.method == 'PUT' or request.method == 'PATCH':
-        serializer = CommentSerializer(comment,
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = CommentSerializer(instance,
                                        data=request.data,
-                                       partial=True)
+                                       partial=partial
+                                       )
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def create(self, request, *args, **kwargs):
+        post_id = kwargs.pop('post_id')
+        post = get_object_or_404(Post, id=post_id)
+        serializer = CommentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer, post)
+
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def perform_create(self, serializer, post):
+        serializer.save(author=self.request.user,
+                        post=post)
+
+    def perform_update(self, serializer):
+        if serializer.instance.author != self.request.user:
+            raise PermissionDenied(ERROR_MESSAGES['OTHER_USER_DENIED'])
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    elif request.method == 'DELETE':
-        comment.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+    def perform_destroy(self, instance):
+        if instance.author != self.request.user:
+            raise PermissionDenied(ERROR_MESSAGES['OTHER_USER_DENIED'])
+        instance.delete()
