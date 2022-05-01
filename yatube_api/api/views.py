@@ -1,6 +1,6 @@
 from django.shortcuts import get_object_or_404
-from posts.models import Comment, Group, Post, User
-from rest_framework import status, viewsets
+from posts.models import Group, Post, User
+from rest_framework import status, viewsets, permissions
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
@@ -11,22 +11,36 @@ from .serializers import (CommentSerializer,
 ERROR_MESSAGES = {'OTHER_USER_DENIED': 'Other user\'s content changing denied'}
 
 
+class AlllButAuthorReadOnly(permissions.BasePermission):
+
+    edit_methods = ("PUT", "PATCH", "DELETE")
+
+    def has_permission(self, request, view):
+        if request.user.is_authenticated:
+            return True
+
+    def has_object_permission(self, request, view, obj):
+        if request.user.is_superuser:
+            return True
+
+        if request.method in permissions.SAFE_METHODS:
+            return True
+
+        if obj.author == request.user:
+            return True
+
+        return False
+
+
 class PostViewSet(viewsets.ModelViewSet):
+
+    permission_classes = [AlllButAuthorReadOnly]
+
     queryset = Post.objects.all()
     serializer_class = PostSerializer
 
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)
-
-    def perform_update(self, serializer):
-        if serializer.instance.author != self.request.user:
-            raise PermissionDenied(ERROR_MESSAGES['OTHER_USER_DENIED'])
-        super(PostViewSet, self).perform_update(serializer)
-
-    def perform_destroy(self, instance):
-        if instance.author != self.request.user:
-            raise PermissionDenied(ERROR_MESSAGES['OTHER_USER_DENIED'])
-        super(PostViewSet, self).perform_destroy(instance)
 
 
 class UserViewSet(viewsets.ReadOnlyModelViewSet):
@@ -39,21 +53,17 @@ class GroupViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = GroupSerializer
 
 
-class CommentsViewSet (viewsets.ViewSet):
+class CommentsViewSet (viewsets.ModelViewSet):
     def get_queryset(self):
-        qs = Comment.objects.filter(post=self.kwargs['post_id'])
-        return qs
-
-    def get_object(self):
-        obj = get_object_or_404(Comment, id=self.kwargs['pk'])
-        return obj
+        post = get_object_or_404(Post, id=self.kwargs.get('post_id'))
+        return post.comments
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
         serializer = CommentSerializer(queryset, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    def retrieve(self, request, post_id, pk):
+    def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
         serializer = CommentSerializer(instance, many=False)
         return Response(serializer.data, status=status.HTTP_200_OK)
